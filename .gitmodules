@@ -1,0 +1,3 @@
+[submodule "QuantDinger-Vue"]
+	path = QuantDinger-Vue
+	url = https://github.com/brokermr810/QuantDinger-Vue.git
