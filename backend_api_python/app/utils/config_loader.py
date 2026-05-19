@@ -98,6 +98,7 @@ def load_addon_config() -> Dict[str, Any]:
         ('MINIMAX_API_KEY', 'minimax.api_key', 'string'),
         ('MINIMAX_BASE_URL', 'minimax.base_url', 'string'),
         ('MINIMAX_MODEL', 'minimax.model', 'string'),
+        ('MINIMAX_TIMEOUT', 'minimax.timeout', 'int'),
 
         # LLM Provider Selection
         ('LLM_PROVIDER', 'llm.provider', 'string'),
