@@ -154,6 +154,9 @@ services:
     build:
       context: ${FRONTEND_SRC_PATH:-./QuantDinger-Vue}
       dockerfile: Dockerfile
+      args:
+        NODE_IMAGE: ${IMAGE_PREFIX:-}node:18-alpine
+        NGINX_IMAGE: ${IMAGE_PREFIX:-}nginx:1.25-alpine
     container_name: quantdinger-frontend
     restart: unless-stopped
     ports:
