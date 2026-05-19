@@ -3,9 +3,10 @@ Fast Analysis API Routes
 
 New high-performance analysis endpoints that replace the slow multi-agent system.
 """
-from flask import Blueprint, request, jsonify, g
+from flask import Blueprint, request, jsonify, g, Response
 import threading
 import time
+import json
 
 from app.utils.auth import login_required
 from app.utils.logger import get_logger
@@ -566,6 +567,153 @@ def delete_history(memory_id: int):
             'msg': str(e),
             'data': None
         }), 500
+
+
+def _sse_frame(event: str, data) -> bytes:
+    payload = json.dumps(data, default=str, ensure_ascii=False)
+    return f"event: {event}\ndata: {payload}\n\n".encode("utf-8")
+
+
+@fast_analysis_bp.route('/task/<int:task_id>/stream', methods=['GET'])
+@login_required
+def stream_task_status(task_id: int):
+    """
+    SSE stream for async analysis task progress.
+
+    GET /api/fast-analysis/task/<task_id>/stream
+
+    Frames:
+      event: snapshot  — immediate current state
+      event: result    — final result when completed
+      event: ping      — keepalive every 15s
+
+    Client can pass ?since=<sequence> or Last-Event-ID header to resume.
+    """
+    user_id = getattr(g, 'user_id', None)
+    memory = get_analysis_memory()
+
+    # First frame: current snapshot
+    row = memory.get_memory_by_id(task_id, user_id=user_id)
+    if not row:
+        return jsonify({'code': 0, 'msg': 'Task not found', 'data': None}), 404
+
+    # Capture initial values before entering the generator
+    initial_task_id = row['id']
+    initial_status = row.get('status') or row.get('task_status', 'processing')
+    initial_summary = row.get('summary', '')
+    initial_error = row.get('error_message') or (row.get('raw_result') or {}).get('error')
+    initial_decision = row.get('decision')
+    initial_confidence = row.get('confidence')
+    initial_market = row.get('market')
+    initial_symbol = row.get('symbol')
+    initial_timeframe = (row.get('raw_result') or {}).get('timeframe')
+
+    def _gen():
+        # Emit current state immediately
+        yield _sse_frame("snapshot", {
+            'task_id': initial_task_id,
+            'status': initial_status,
+            'market': initial_market,
+            'symbol': initial_symbol,
+            'timeframe': initial_timeframe,
+            'summary': initial_summary,
+            'decision': initial_decision,
+            'confidence': initial_confidence,
+            'error_message': initial_error,
+        })
+
+        last_ping = time.monotonic()
+
+        # Poll until task completes or fails
+        for i in range(120):  # max 2 minutes polling
+            time.sleep(1)
+            latest = memory.get_memory_by_id(task_id, user_id=user_id)
+            if not latest:
+                yield _sse_frame("result", {'task_id': task_id, 'status': 'not_found', 'error': 'Task not found'})
+                break
+
+            status = latest.get('status') or latest.get('task_status', 'processing')
+            if status == 'completed':
+                # Fetch full result
+                full = latest.get('raw_result') or {}
+                yield _sse_frame("result", {
+                    'task_id': latest['id'],
+                    'status': 'completed',
+                    'market': latest.get('market'),
+                    'symbol': latest.get('symbol'),
+                    'decision': latest.get('decision'),
+                    'confidence': latest.get('confidence'),
+                    'summary': latest.get('summary'),
+                    'full_result': full,
+                    'memory_id': latest['id'],
+                })
+                break
+            elif status == 'failed':
+                error_msg = latest.get('error_message') or (latest.get('raw_result') or {}).get('error') or 'Unknown error'
+                yield _sse_frame("result", {
+                    'task_id': latest['id'],
+                    'status': 'failed',
+                    'error': error_msg,
+                })
+                break
+
+            # Intermediate ping to keep connection alive
+            now = time.monotonic()
+            if now - last_ping > 15.0:
+                yield _sse_frame("ping", {"ts": now})
+                last_ping = now
+
+    return Response(
+        _gen(),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no',
+            'Connection': 'keep-alive',
+        },
+    )
+
+
+@fast_analysis_bp.route('/task/<int:task_id>', methods=['GET'])
+@login_required
+def get_task_status(task_id: int):
+    """
+    Get current status of an async analysis task.
+
+    GET /api/fast-analysis/task/<task_id>
+    """
+    try:
+        user_id = getattr(g, 'user_id', None)
+        memory = get_analysis_memory()
+        row = memory.get_memory_by_id(task_id, user_id=user_id)
+
+        if not row:
+            return jsonify({'code': 0, 'msg': 'Task not found', 'data': None}), 404
+
+        status = row.get('status') or row.get('task_status', 'processing')
+        full_result = row.get('raw_result') or {}
+
+        return jsonify({
+            'code': 1,
+            'msg': 'success',
+            'data': {
+                'task_id': row['id'],
+                'status': status,
+                'market': row.get('market'),
+                'symbol': row.get('symbol'),
+                'timeframe': full_result.get('timeframe'),
+                'decision': row.get('decision') if status == 'completed' else None,
+                'confidence': row.get('confidence') if status == 'completed' else None,
+                'summary': row.get('summary') if status == 'completed' else row.get('summary'),
+                'error': row.get('error_message') or full_result.get('error') if status == 'failed' else None,
+                'full_result': full_result if status == 'completed' else None,
+                'created_at': row.get('created_at'),
+                'updated_at': row.get('updated_at'),
+            }
+        })
+    except Exception as e:
+        logger.error(f"Get task status failed: {e}")
+        return jsonify({'code': 0, 'msg': str(e), 'data': None}), 500
 
 
 @fast_analysis_bp.route('/feedback', methods=['POST'])

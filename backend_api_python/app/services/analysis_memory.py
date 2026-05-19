@@ -367,6 +367,53 @@ class AnalysisMemory:
             logger.error(f"Failed to get all history: {e}")
             return {"items": [], "total": 0, "page": page, "page_size": page_size}
 
+    def get_memory_by_id(self, memory_id: int, user_id: int = None) -> Optional[Dict[str, Any]]:
+        """Get a single analysis memory by ID, scoped to user for security."""
+        try:
+            with get_db_connection() as db:
+                cur = db.cursor()
+                params = [int(memory_id)]
+                where = "id = %s"
+                if user_id:
+                    where += " AND user_id = %s"
+                    params.append(user_id)
+                cur.execute(f"""
+                    SELECT
+                        id, user_id, market, symbol, decision, confidence,
+                        price_at_analysis, summary, reasons, scores,
+                        indicators_snapshot, raw_result,
+                        task_status, task_error,
+                        created_at, updated_at
+                    FROM qd_analysis_memory
+                    WHERE {where}
+                    LIMIT 1
+                """, params)
+                row = cur.fetchone()
+                cur.close()
+                if not row:
+                    return None
+                return {
+                    "id": row['id'],
+                    "user_id": row.get('user_id'),
+                    "market": row['market'],
+                    "symbol": row['symbol'],
+                    "decision": row['decision'],
+                    "confidence": row['confidence'],
+                    "price": float(row['price_at_analysis']) if row['price_at_analysis'] else None,
+                    "summary": row['summary'],
+                    "reasons": _safe_json_parse(row['reasons'], []),
+                    "scores": _safe_json_parse(row['scores'], {}),
+                    "indicators": _safe_json_parse(row['indicators_snapshot'], {}),
+                    "raw_result": _safe_json_parse(row['raw_result'], None),
+                    "status": row.get('task_status') or 'completed',
+                    "error_message": row.get('task_error') or '',
+                    "created_at": row['created_at'].isoformat() if row['created_at'] else None,
+                    "updated_at": row['updated_at'].isoformat() if row.get('updated_at') else None,
+                }
+        except Exception as e:
+            logger.error(f"Failed to get memory {memory_id}: {e}")
+            return None
+
     def delete_history(self, memory_id: int, user_id: int = None) -> bool:
         """
         Delete a history record by ID.
@@ -444,7 +491,7 @@ class AnalysisMemory:
                 cur = db.cursor()
                 cur.execute("""
                     UPDATE qd_analysis_memory
-                    SET decision = %s,
+                    SET decision = COALESCE(%s, 'HOLD'),
                         confidence = %s,
                         price_at_analysis = %s,
                         summary = %s,
@@ -461,7 +508,7 @@ class AnalysisMemory:
                         updated_at = NOW()
                     WHERE id = %s
                 """, (
-                    result.get("decision"),
+                    result.get("decision") or ("HOLD" if result.get("error") else None),
                     result.get("confidence"),
                     result.get("market_data", {}).get("current_price"),
                     result.get("summary"),

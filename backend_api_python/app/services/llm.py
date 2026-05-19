@@ -60,7 +60,7 @@ PROVIDER_CONFIGS = {
         "fallback_model": "",
     },
     LLMProvider.MINIMAX: {
-        "base_url": "https://api.minimax.io/v1",
+        "base_url": "https://api.minimaxi.com/v1",
         "default_model": "MiniMax-M2.7",
         "fallback_model": "MiniMax-M2.7-highspeed",
     },
