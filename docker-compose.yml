@@ -43,9 +43,13 @@ services:
     command:
       - "postgres"
       - "-c"
-      - "max_connections=${PG_MAX_CONNECTIONS:-150}"
+      - "max_connections=${PG_MAX_CONNECTIONS:-30}"
       - "-c"
-      - "shared_buffers=${PG_SHARED_BUFFERS:-256MB}"
+      - "shared_buffers=${PG_SHARED_BUFFERS:-64MB}"
+    deploy:
+      resources:
+        limits:
+          memory: ${PG_MEM_LIMIT:-256M}
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./backend_api_python/migrations/init.sql:/docker-entrypoint-initdb.d/01-init.sql
@@ -66,7 +70,11 @@ services:
     image: ${IMAGE_PREFIX:-}redis:7-alpine
     container_name: quantdinger-redis
     restart: unless-stopped
-    command: ["redis-server", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru"]
+    command: ["redis-server", "--maxmemory", "64mb", "--maxmemory-policy", "allkeys-lru"]
+    deploy:
+      resources:
+        limits:
+          memory: ${REDIS_MEM_LIMIT:-128M}
     ports:
       - "${REDIS_PORT:-127.0.0.1:6379}:6379"
     networks:
@@ -91,6 +99,10 @@ services:
         BUILD_REGION: ${BUILD_REGION:-cn}
     container_name: quantdinger-backend
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: ${BACKEND_MEM_LIMIT:-512M}
     depends_on:
       postgres:
         condition: service_healthy
@@ -116,7 +128,7 @@ services:
       # Defaults are safe for ~50 concurrent DB users; raise if you run many
       # bots or see `connection pool exhausted` errors.
       - DB_POOL_MIN=${DB_POOL_MIN:-5}
-      - DB_POOL_MAX=${DB_POOL_MAX:-50}
+      - DB_POOL_MAX=${DB_POOL_MAX:-10}
       - DB_POOL_ACQUIRE_TIMEOUT=${DB_POOL_ACQUIRE_TIMEOUT:-10}
       - DB_POOL_HEALTH_CHECK=${DB_POOL_HEALTH_CHECK:-true}
       # Route-level executor tuning (each worker may use one DB connection).
@@ -157,6 +169,11 @@ services:
       args:
         NODE_IMAGE: ${IMAGE_PREFIX:-}node:18-alpine
         NGINX_IMAGE: ${IMAGE_PREFIX:-}nginx:1.25-alpine
+        NODE_OPTIONS: ${NODE_OPTIONS:---max-old-space-size=384}
+    deploy:
+      resources:
+        limits:
+          memory: ${FRONTEND_MEM_LIMIT:-128M}
     container_name: quantdinger-frontend
     restart: unless-stopped
     ports:
